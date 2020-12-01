@@ -1,0 +1,447 @@
+---
+title: "Data Analysis Skill Test - 4intelligence"
+author: "Luis Gustavo Bettoni"
+date: "27/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### This document contains the resolution and the code of the two cases provided for the data analysis skill test. The exercises were solved with R and this report was produced using Rmarkdown. We first load all packages that will be used.
+
+```{r}
+# load libraries
+library(dplyr)    # general tool
+library(tidyr)    # general tool
+library(ggplot2)  # graphs
+library(corrplot) # plot correlation
+library(Hmisc)
+library(plm)      # panel
+library(fpp2)     # forecast
+library(stats)    # forecast
+library(reshape)  # reshape
+```
+
+## 1. Case 1
+
+We are provided the series for TFP at constant national prices (2005 = 1) for United States (USA), Canada (CAN) and Mexico (MEX) between 1950 and 2011. We are asked to describe this data through an explanatory data analysis and to provide forecast over a 10 years period. First we import the data and rename the variables.
+
+```{r}
+# import data base
+tfp <- read.csv("TFP.csv")
+
+# rename
+tfp<-tfp%>%
+  dplyr::rename(country="isocode",
+                tfp="rtfpna")
+```
+
+### 1.1 Exploratory data analysis
+
+We begin by checking whether there is any problem with the data, such as misreports or missing values. 
+
+
+```{r}
+# quick summary of database 
+summary(tfp)
+```
+
+We can see that data goes from 1950 to 2011 and we do not have any missing observations. Further, TFP varies from 0.6171 to 1.3837, with an average of 0.9756. Now we analyze data by country. First we plot the evolution of TFP series for each country.
+
+```{r}
+# graph TFP by country
+ggplot(data=tfp,aes(x=year,y=tfp,group=country))+ geom_line(aes(linetype=country,color=country))+ scale_x_continuous(breaks = seq(1950, 2011, by = 5))
+```
+
+Even though the evolution of TFP is quite different across the countries, the pattern for each series seems reasonable. Hence, apparently there is no misreports or outliers in the data. We also compute the first moments and the distribution of TFP for each country. In order to make things easier first we organize the data in a more convenient way
+
+```{r}
+# reshape
+tfp2<-tfp%>%
+  reshape(timevar = "country",idvar="year",direction="wide")
+tfp2<-tfp2%>%
+  dplyr::rename(USA="tfp.USA",
+                MEX="tfp.MEX",
+                CAN="tfp.CAN")
+```
+
+```{r}
+# calculate mean and standard deviation for each country
+tfp %>%
+dplyr::group_by(country)%>%
+summarise(mean=mean(tfp),sd=sd(tfp))
+```
+
+```{r}
+# distribution
+ggplot(data=tfp, aes(x=tfp, colour=country)) + geom_density()
+```
+
+Finally, we compute the correlation between the countries.
+
+```{r}
+cor<-cor(tfp2)
+corrplot(cor, type = "full", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+```
+
+### 1.2 Forecast
+
+In order to forecast the TFP series, we first define the data as time series.
+
+```{r}
+# define time series
+time<-ts(tfp2)
+
+# checking data
+head(time)
+```
+
+We begin with the simplest forecast function:
+
+```{r}
+# 10 periods forecast 
+forecast<-forecast(time,h=10)
+
+# plot forecast
+plot(forecast)
+```
+
+Now we an alternative approach by using Holter's exponential smoother
+
+```{r}
+# USA
+usa<-tfp2%>%
+dplyr::select(USA)
+usa<-ts(usa)
+usa<-HoltWinters(usa,gamma=FALSE)
+usa<-forecast:::forecast.HoltWinters(usa,h=10)
+plot(usa)
+
+# MEX
+mex<-tfp2%>%
+dplyr::select(MEX)
+mex<-ts(mex)
+mex<-HoltWinters(mex,gamma=FALSE)
+mex<-forecast:::forecast.HoltWinters(mex,h=10)
+plot(mex)
+
+# CAN
+can<-tfp2%>%
+dplyr::select(CAN)
+can<-ts(can)
+can<-HoltWinters(can,gamma=FALSE)
+can<-forecast:::forecast.HoltWinters(can,h=10)
+plot(can)
+```
+
+And then, we analyze the residuals from these forecasts
+
+```{r}
+# USA
+acf(usa$residuals, lag.max=20,na.action = na.pass)
+Box.test(usa$residuals, lag=20, type="Ljung-Box")
+
+# MEX
+acf(mex$residuals, lag.max=20,na.action = na.pass)
+Box.test(mex$residuals, lag=20, type="Ljung-Box")
+
+# CAN
+acf(can$residuals, lag.max=20,na.action = na.pass)
+Box.test(can$residuals, lag=20, type="Ljung-Box")
+```
+
+### 1.3 Other variables
+
+There are several features that can help to predict TFP. Since TFP is a measure of productivity, among the variables available at Penn World Table human capital is clearly an important one to explain TFP series since higher levels of education are on average associated with higher levels of productivity.
+
+
+## 2. Case 2
+
+Now we are provided data on the series of imports and exports in Brazil for a large set of products. We are asked to explore this data and then to do forecasts on the commercial relationship in the next 11 years. Again we begin by importing the data.
+
+```{r}
+# load additional libraries
+library(lubridate) # date
+library(vars)      # forecast
+```
+
+```{r}
+# import data base
+trade <- read.csv("data_comexstat.csv")
+```
+
+### 2.1 Soybean exports
+
+First we are asked to show the evolution of total monthly and total annual exports of soybeans, soybean oil and soybean meal. We begin by checking the variables in the dataset and then the categories related to products exported/imported.
+
+```{r}
+ls(trade)
+unique(trade$product)
+```
+
+Now we estimate the total monthly exports of these products. In order to do this first we keep only observations on exports and on these products. Then, we aggregate, i.e., we sum the tons of export for them. 
+
+```{r}
+# keep only exports and selected products
+ex1<-trade%>%
+dplyr::filter(type=="Export")%>% 
+dplyr::filter(product=="soybeans"|product=="soybean_oil"|product=="soybean_meal")
+
+# collapse data by product and date
+ex1<-ex1%>%
+dplyr::group_by(product,year=year(date),month=month(date))%>%
+dplyr::summarize(tons=sum(tons),usd=sum(usd))
+
+ex1<-ex1%>%
+dplyr::mutate(date=paste(year,month))
+
+# also compute the total exports of all products together
+total<-ex1%>%
+dplyr::group_by(year,month,date)%>%
+dplyr::summarize(tons=sum(tons),usd=sum(usd))%>%
+dplyr::mutate(product="total")
+
+ex1<-rbind(ex1,total) # merge total with individual products
+
+# plot tons
+ggplot(data=ex1,aes(x=date,y=tons,group=product))+ geom_line(aes(linetype=product,color=product))
+
+```
+
+In USD the evolution of these exports were given by:
+
+```{r}
+# plot usd
+ggplot(data=ex1,aes(x=date,y=usd,group=product))+ geom_line(aes(linetype=product,color=product))
+```
+
+We could also try to analyze the evolution of monthly exports through years plotting the series for each year separetely. We present this bellow, however, there is no clear no pattern that can be directly indetified in this way.
+
+```{r}
+# soybeans 
+ex1%>%
+dplyr::filter(product=="soybeans")%>%
+ggplot(aes(x=month,y=tons,group=year))+ geom_line(aes(color=year))
+
+# soybean_oil
+ex1%>%
+dplyr::filter(product=="soybean_oil")%>%
+ggplot(aes(x=month,y=tons,group=year))+ geom_line(aes(color=year))
+
+# soybean_meal
+ex1%>%
+dplyr::filter(product=="soybean_meal")%>%
+ggplot(aes(x=month,y=tons,group=year))+ geom_line(aes(color=year))
+```
+
+Now we further aggregate exports in terms of years.
+
+```{r}
+# collapse again but now in terms of year and not month
+ex1<-ex1%>%
+dplyr::group_by(product,year)%>%
+dplyr::summarize(tons=sum(tons),usd=sum(usd))
+
+# compute the overall total (for all products together)
+total<-ex1%>%
+dplyr::group_by(year)%>%
+dplyr::summarize(tons=sum(tons),usd=sum(usd))%>%
+dplyr::mutate(product="total")
+
+ex1<-rbind(ex1,total) # merge total with individual data
+
+# plot tons
+ggplot(data=ex1,aes(x=year,y=tons,group=product))+ geom_line(aes(linetype=product,color=product))
+
+# plot usd
+ggplot(data=ex1,aes(x=year,y=usd,group=product))+ geom_line(aes(linetype=product,color=product))
+```
+
+### 2.2 Most important exports in last 5 year
+
+Next we are asked about the 3 most important products exported by Brazil in the last 5 years. Again we start by keeping only observations that satisfy this requirement. In particular we drop all observations prior to 5 years from the last observation and observations on imports.
+
+```{r}
+# keep selected years
+last(year(trade$date))-5 # first year to be considered
+ex2<-trade%>%
+dplyr::filter(year(date)>last(year(trade$date))-5)%>%
+dplyr::filter(type=="Export")
+
+# collapse USD exports by product
+ex2<-ex2%>%
+dplyr::group_by(product)%>%
+dplyr::summarize(usd=sum(usd))
+
+# sort products by their importance (in terms of USD exports)
+ex2<-ex2%>%
+dplyr::arrange(desc(usd))
+
+head(ex2,3)
+
+# calculate shares to build pie chart
+total<-ex2%>%
+dplyr::summarize(total=sum(usd))# total of all products
+ex2<-cbind(ex2,total) # merge total with individual data
+ex2<-ex2%>%
+dplyr::mutate(usd=round(100*usd/total,2))%>%
+dplyr::select(-c(total))
+
+# plot pie chart
+ggplot(data=ex2,aes(x="",y=usd,fill=product))+
+geom_bar(width = 1, stat = "identity")+
+  coord_polar("y", start=0)
+```
+
+As can be seen soybeans is the main product exported by Brazil in the last five years, representing 55,39 percent of Brazilian exports.
+
+### 2.3 Corn main routes Most important exports in last 5 year
+
+Now we evaluate the main routes through which Brazil have been exporting corn in the last few years. Here we thing in the last few years in terms of the last 3 years of data.
+
+```{r}
+# filter
+last(year(trade$date))-3 # first year to be considered
+ex3<-trade%>%
+dplyr::filter(year(date)>last(year(trade$date))-3)%>%
+dplyr::filter(type=="Export")
+
+# checking data
+unique(ex3$type)
+unique(ex3$product)
+
+# aggregate data for each product and route
+ex3<-ex3%>%
+dplyr::group_by(product,route)%>%
+dplyr::summarize(tons=sum(tons))
+
+# sort data
+ex3<-ex3%>%
+dplyr::arrange(product,desc(tons))
+
+# main route for corn export
+ex3%>%
+dplyr::filter(product=="corn")
+```
+
+Hence, the main route through which corn is exported is sea, followed by river. Now we analyze whether there are differences in the relative importance of routes depending on the product.
+
+```{r}
+ggplot(data=ex3,aes(x=product,y=tons,fill=route))+
+geom_bar(width = 1, stat = "identity")
+```
+
+As figure shows, for the other products sea is the main export route.
+
+### 2.4 Most important corn and sugar trade partners in last 3 years
+
+Now we evaluate the main trade partners for corn and sugar over the last 3 years.
+
+```{r}
+# filters
+last(year(trade$date))-3 
+ex4<-trade%>%
+dplyr::filter(year(date)>last(year(trade$date))-3)%>% # last 3 years
+dplyr::filter(product=="corn"|product=="sugar")       # imports/exports of corn and sugar
+
+# aggregate corn and sugar trade by country
+ex4<-ex4%>%
+dplyr::group_by(country)%>%
+dplyr::summarize(usd=sum(usd))
+
+# sort trade in terms of USD
+ex4<-ex4%>%
+dplyr::arrange(desc(usd))
+
+head(ex4)
+```
+
+The main trade partners of corn and sugar with Brazil are Iran, Bangladesh and Algeria.
+
+```{r}
+# keep only top 10 partners
+ex4<-ex4%>%
+dplyr::arrange(desc(usd))%>%
+dplyr::mutate(rank=row_number())%>%
+dplyr::filter(rank<=10)
+
+# plot
+ggplot(data=ex4,aes(x=reorder(country, -usd),y=usd))+ geom_bar(stat="identity")
+```
+
+
+### 2.5 Most important states in terms of exports for each product
+
+Now we evaluate the five most important states in terms of exports for each product
+
+```{r}
+# filter
+last(year(trade$date))-3
+ex5<-trade%>%
+dplyr::filter(year(date)>last(year(trade$date))-3)%>%
+dplyr::filter(type=="Export")
+
+# aggregate exports by product and state
+ex5<-ex5%>%
+dplyr::group_by(product,state)%>%
+dplyr::summarize(usd=sum(usd))
+
+# sort
+ex5<-ex5%>%
+dplyr::group_by(product)%>%
+dplyr::mutate(rank = row_number(desc(usd)))%>%
+dplyr::filter(rank <= 5) %>%
+dplyr::arrange(product,desc(rank))
+
+ex5
+
+# plot
+ggplot(data=ex5,aes(x=reorder(product,-usd),y=usd,fill=reorder(state,-usd)))+ geom_bar(stat="identity", position=position_dodge())
+```
+
+### 2.6 Forecast export soybeans, soybean_meal, and corn for the next 11 years (2020-2030)
+
+Finally, we provide annual forecast  for soybeans, soybean_meal, and corn over the next 11 years.
+
+```{r}
+# filter
+ex6<-trade%>%
+dplyr::filter(product=="soybeans"|product=="soybean_meal"|product=="corn")
+ex6<-ex6%>%
+dplyr::filter(type=="Export")
+
+# keep only variables of interest
+ex6<-ex6%>%
+dplyr::select(-c(state,country,type,route,usd))
+
+# collapse monthly
+ex6<-ex6%>%
+dplyr::group_by(product,year=year(date))%>%
+dplyr::summarize(tons=sum(tons))
+
+# reshape
+ex6<-ex6%>%
+spread(product,tons)
+ex6<-ex6%>%dplyr::select(-c(year))
+
+# time series
+ex6<-ts(ex6)
+
+# lag selection for VAR
+lagselect <- VARselect(ex6, lag.max = 15, type = "const")
+lagselect$selection
+
+# var estimation
+est <- VAR(ex6, p = 3, type = "trend", season = NULL, exog = NULL) 
+summary(est)
+
+# forecast
+ex6 <- predict(est, n.ahead = 11, ci = 0.95)
+plot(ex6)
+
+forecast
+```
+
